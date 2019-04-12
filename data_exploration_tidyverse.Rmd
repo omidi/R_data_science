@@ -1,0 +1,186 @@
+---
+title: "Data Exploration by Tidyverse"
+author: "Saeed Omidi"
+date: "4/11/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction  
+
+Tidyverse is a collection of packages that are generally used in everyday data analysis. This includes, *dplyr* and *ggplot2*. The aim of this short tutorial is to help you getting familiarized with these tools. 
+
+```{r prepare, echo=FALSE, include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(tidyr)
+library(ggthemes)
+
+fvt <- read.table('data/fvt.txt', header = T, sep = '\t', stringsAsFactors = F)
+fft <- dplyr::as_tibble(read.table('data/fft.txt', header = T, sep = '\t', stringsAsFactors = F))
+```
+
+## Data description
+We are going to work with the following data: 
+
+* ```fvt```: variant table for the entire run, which consists of `r nrow(fvt)` variants from `r length(unique(fvt$sample))` 
+* ```fft```: the fusion table for the same number of samples, this consist of `r nrow(fft)`
+
+Let's look at the data:
+
+```{r checking_data}
+class(fvt)
+
+fvt <- dplyr::as_tibble(fvt)
+```
+
+# dplyr functions
+
+There are many useful functions implemented within *dplyr* package. However, we will only cover a handful of functions which happened to be the mostly used ones. 
+
+
+```{r mutate_example, echo=TRUE}
+df <- fvt %>% 
+  dplyr::mutate(
+    unique_id = sprintf('%s_%s', gene, c.DNA), 
+    var_frac = as.numeric(stringr::str_replace(var_percent, '%$', ''))
+    )  %>% 
+  dplyr::select(sample, gene, alt, ref, type, var_frac, unique_id, filter)
+
+df
+```
+
+With function ```mutate``` we can calculate new columns and with ```select``` we can select or de-select some of the columns. For instance: 
+
+```{r select_example}
+dplyr::select(df, -gene, -filter, sample_name = sample) 
+```
+
+Next, we are often interested to select some of the rows based on some conditions. This is done by ```filter```. 
+
+```{r filter_example}
+df %>% 
+  dplyr::filter(type == 'SNP' & filter == '.') 
+```
+Above we saw the example of a condition with '''&''' operation. We can also use ```|``` and ```!``` for logical OR and NOT, respectively. Sometimes it's also useful to use ```%in%``` function for checking membership. 
+
+```{r checking_membership} 
+df %>% 
+  dplyr::filter(ref %in% c('C', 'T') & grepl('possible_deamination', filter)) 
+```
+
+Sorting the data can be done by ```arrange```. Here is how: 
+
+```{r arrange_example}
+df %>% 
+  dplyr::filter(type == 'SNP' & filter == '.') %>% 
+  dplyr::select(-filter, -type) %>% 
+  dplyr::arrange(desc(var_frac)) 
+```
+
+In some applications, specially if we're dealing with huge number of rows, we would like to take a random subset of the data. 
+
+```{r random_subset_example} 
+df %>% 
+  dplyr::filter(type == 'SNP' & filter == '.') %>% 
+  dplyr::sample_n(10) %>% 
+  head(5)
+```
+
+Similarly, we can use ```sample_frac(f)``` to take a fraction ```f``` of the rows, where ```f``` is a value between 0 and 1.
+
+## Grouping the data 
+Often we use grouping functionality to group the data and calculate statistics on the group. 
+
+```{r group_by_1} 
+df %>% 
+  dplyr::filter(filter == '.') %>% 
+  dplyr::group_by(sample) %>% 
+  dplyr::summarise(
+    total = n(),
+    mean_var_frac = round(mean(var_frac), 2))
+``` 
+
+Grouping can be easily extended to more than one variable. For example, we want to group samples and variant types. Bellow, shows hows it's done:
+
+```{r group_by_2}
+df %>% 
+  dplyr::filter(filter == '.') %>% 
+  dplyr::group_by(sample, type) %>% 
+  dplyr::summarise(
+    total = n(),
+    mean_var_frac = round(mean(var_frac), 2)) %>% 
+  dplyr::arrange(desc(total))
+```
+
+Grouping can be used to identify samples with high amount of C>T:G>A substitution. 
+
+```{r grouping_deamination}
+deamination.df <- df %>% 
+  dplyr::filter(type != 'INDEL') %>% 
+  dplyr::mutate(mutation = sprintf('%s>%s', ref, alt)) %>% 
+  dplyr::group_by(sample, mutation) %>% 
+  dplyr::summarise(
+    count = n(),
+    mean_var_frac = mean(var_frac, na.rm = T)
+  ) %>% 
+  dplyr::filter(mutation %in% c('C>T', 'G>A')) 
+
+deamination.df
+```
+
+We can now use ```ggplot2``` to easily visualize the data: 
+
+```{r vis_deamination}
+df %>% 
+  dplyr::filter(type != 'INDEL') %>% 
+  dplyr::mutate(mutation = sprintf('%s>%s', ref, alt)) %>% 
+  dplyr::group_by(sample, mutation) %>% 
+  dplyr::summarise(
+    count = n(),
+    mean_var_frac = mean(var_frac, na.rm = T)
+  ) %>% 
+  dplyr::filter(mutation %in% c('C>T', 'G>A')) %>% 
+ggplot2::ggplot() + 
+  ggplot2::geom_bar(aes(x = sample, y = count, fill = mutation), stat = 'identity', position = 'dodge') + 
+  ggplot2::theme_classic() + 
+  ggplot2::theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+Another way of visualizing the data can be by looking at the relationship between average variant fraction and the total number of deaminated bases: 
+
+```{r scatter_deamination}
+ggplot2::ggplot(deamination.df) + 
+  ggplot2::geom_point(aes(x = count, y = mean_var_frac, col = sample)) + 
+  scale_x_log10() + scale_y_log10()  + 
+  ggthemes::theme_economist()
+```
+
+Let's dig in more into ```ggplot2```. In the following example we draw a plot of variant fraction for different samples. 
+
+```{r var_frac_diff_samples}
+df %>% 
+  dplyr::filter(filter == '.') %>% 
+  dplyr::mutate(deaminated = ifelse((ref == 'C' & alt == 'T') | (ref == 'G' & alt == 'A'), 'Yes', 'No')) %>% 
+  ggplot2::ggplot() + 
+  geom_point(aes(x = sample, y = var_frac, colour = type, pch = deaminated), position = 'jitter', alpha = 1/2) +    # note we used 'colour' instead of 'col'
+  ggplot2::theme_bw() + 
+  ggplot2::theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  xlab('') 
+```
+
+In some tasks, we want to combine a number of columns together. For instance, what we already calculated for ```unique_id```. This can be done also by some of the *tidyr* functionalities: 
+
+```{r tidyr_unite} 
+fvt %>% 
+  tidyr::unite(unique_id, c('gene', 'chromosome', 'genome_position', 'ref', 'alt'), sep = '-') %>% 
+  dplyr::select(sample, unique_id)
+```
+
+## Joining the tables
+## Pivoting operations 
+
